@@ -5,7 +5,7 @@ metadata:
   labels:
     app: man-nginx-1
   name: man-nginx-1
-  namespace: production
+  namespace: surachai
 spec:
   replicas: 1
   selector:
