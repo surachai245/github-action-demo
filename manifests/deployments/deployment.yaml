@@ -1,0 +1,26 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  creationTimestamp: null
+  labels:
+    app: man-nginx-1
+  name: man-nginx-1
+  namespace: production
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: man-nginx-1
+  strategy: {}
+  template:
+    metadata:
+      creationTimestamp: null
+      labels:
+        app: man-nginx-1
+    spec:
+      containers:
+      - name: plainfatboy
+        image: kubesuperops.azurecr.io/kubeops/ms-1:v1
+      imagePullSecrets:
+      - name: acr-cred
+status: {}
