@@ -10,4 +10,4 @@ metadata:
   resourceVersion: "409729"
   uid: 37ac590f-ed04-42a6-843a-8f6c0bfaf1e7
 secrets:
-- name: github-actions-token-vdtqs
+- name: github-actions-token-89d26
