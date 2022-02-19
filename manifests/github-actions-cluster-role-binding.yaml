@@ -10,4 +10,4 @@ roleRef:
 subjects:
 - kind: ServiceAccount
   name: github-actions
-  namespace: production
+  namespace: surachai
