@@ -1,36 +1,113 @@
-# This is a basic workflow to help you get started with Actions
+name: Production pipeline
 
-name: CI
-
-# Controls when the workflow will run
 on:
-  # Triggers the workflow on push or pull request events but only for the main branch
   push:
-    branches: [ main ]
-  pull_request:
-    branches: [ main ]
+    branches:
+      - main
 
-  # Allows you to run this workflow manually from the Actions tab
-  workflow_dispatch:
+env:
+  IMAGE_NAME: kubeops-ng-app
+  REPO_OWNER_LOWERCASE: 'kubesuperops'
+  REGISTRY: 'kubesuperops.azurecr.io'
 
-# A workflow run is made up of one or more jobs that can run sequentially or in parallel
 jobs:
-  # This workflow contains a single job called "build"
-  build:
-    # The type of runner that the job will run on
-    runs-on: ubuntu-latest
-
-    # Steps represent a sequence of tasks that will be executed as part of the job
+  
+  scan-valner:
+    runs-on: ubuntu-20.04
     steps:
-      # Checks-out your repository under $GITHUB_WORKSPACE, so your job can access it
       - uses: actions/checkout@v2
 
-      # Runs a single command using the runners shell
-      - name: Run a one-line script
-        run: echo Hello, world!
+      - name: Run Trivy vulnerability scanner in repo mode
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          ignore-unfixed: true
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          severity: 'CRITICAL'
 
-      # Runs a set of commands using the runners shell
-      - name: Run a multi-line script
+      - name: Upload Trivy scan results to GitHub Security tab
+        uses: github/codeql-action/upload-sarif@v1
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+  build-kubeops-ng:
+    name: Continuous Integration
+    runs-on: ubuntu-20.04
+    needs:
+      - scan-valner
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Login acr
+        uses: docker/login-action@v1
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Install GitVersion
+        uses: gittools/actions/gitversion/setup@v0.9.10
+        with:
+          versionSpec: '5.x'
+
+      - name: Execute GitVersion
+        uses: gittools/actions/gitversion/execute@v0.9.10
+        with:
+          useConfigFile: true
+          targetPath: ./kubeops-ng
+          configFilePath: ./kubeops-ng/GitVersion.yml
+
+      - name: Display SemVer
         run: |
-          echo Add other actions to build,
-          echo test, and deploy your project.
+          echo "SemVer: $GITVERSION_SEMVER"
+      - name: Build and push to registry
+        run: |
+          cd kubeops-ng
+          docker build -t ${{ env.REGISTRY }}/${{ env.REPO_OWNER_LOWERCASE }}/${{ env.IMAGE_NAME }}:$GITVERSION_SEMVER \
+                       -t ${{ env.REGISTRY }}/${{ env.REPO_OWNER_LOWERCASE }}/${{ env.IMAGE_NAME }}:latest \
+                       --build-arg build_env=${{ env.ENVIRONMENT }} .
+          docker push -a ${{ env.REGISTRY }}/${{ env.REPO_OWNER_LOWERCASE }}/${{ env.IMAGE_NAME }}
+      # ============== End Build =================================================
+      - name: Run Trivy vulnerability scanner
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.REPO_OWNER_LOWERCASE }}/${{ env.IMAGE_NAME }}:latest
+          format: 'table'
+          exit-code: '0'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH'
+
+      - name: Upload version artifact
+        run: |
+          echo $GITVERSION_SEMVER > version
+      - uses: actions/upload-artifact@v2
+        with:
+          name: version
+          path: version
+          
+  deployment-job:
+    name: Continuous Deployment
+    runs-on: ubuntu-20.04
+    needs:
+      - build-kubeops-ng
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Download version artifact
+        uses: actions/download-artifact@v2
+        with:
+          name: version
+
+      - name: Update deployment manifest
+        run: |
+          export VERSION=$(cat version)
+          cd ./manifests/deployments/
+          IMAGENAME=${{ env.REGISTRY }}/${{ env.REPO_OWNER_LOWERCASE }}/${{ env.IMAGE_NAME }}:$VERSION yq -i '.spec.template.spec.containers[0].image = env(IMAGENAME)' deployment.yaml
+      - name: Check manifest content
+        run: |
+          cd ./manifests/deployments/
+          cat deployment.yaml
